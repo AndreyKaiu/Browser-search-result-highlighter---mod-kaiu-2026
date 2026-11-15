@@ -20,6 +20,13 @@ Since this add-on is based on the excellent "Browser search result highlighter" 
 
 The add-on has not been translated into other languages. If you need this, please let me know. I believe I’ve put together a reasonably functional version, though I have only tested it on versions released within the last year.
 
+**Includes the following add-on:**
+[Browser search result highlighter https://ankiweb.net/shared/info/1057317630](https://ankiweb.net/shared/info/1057317630)
+[https://github.com/hssm/browser-search-result-highlighter](https://github.com/hssm/browser-search-result-highlighter)
+Version 3.4.1
+
+**A portion of the code is taken from this add-on:**
+[https://ankiweb.net/shared/info/1920690901](https://ankiweb.net/shared/info/1920690901)
 
 #### HELP AND SUPPORT
 
