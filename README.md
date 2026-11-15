@@ -16,7 +16,7 @@ In record-editing mode, the search panel can also be displayed using a button.
 
 Since this add-on is based on the excellent "Browser search result highlighter" add-on, you can see it in use here, configured to display in green. Any temporary searches you perform will always appear in yellow. It is also shown here that, for widescreen displays, the code is configured to appear on the right-hand side.
 
-<img width="1124" height="682" alt="Browser search result highlighter - mod kaiu 2026 - 4" src="https://github.com/user-attachments/assets/92b0da58-dde5-4bc3-bf3b-6de6a8e666a9" />
+<img width="1124" height="682" alt="Browser search result highlighter - mod kaiu 2026 - 4" src="https://github.com/user-attachments/assets/92b0da58-dde5-4bc3-bf3b-6de6a8e666a9" />  
 
 The add-on has not been translated into other languages. If you need this, please let me know. I believe I’ve put together a reasonably functional version, though I have only tested it on versions released within the last year.
 
