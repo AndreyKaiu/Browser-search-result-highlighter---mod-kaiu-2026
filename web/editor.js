@@ -1,0 +1,1079 @@
+// String from python
+let terms_str = null;
+
+// Parsed in javascript
+let terms_parsed = null;
+
+// First match found to scroll to
+let scroll_to = null;
+
+// User settings from python. Assumes default values pre-populated.
+let settings = {};
+
+// Number of matches total
+let matched_total = 0;
+
+// Number of fields with matches
+let matched_fields = 0;
+
+// Number of tags with matches
+let matched_tags = 0;
+
+const matchCount = (str, re) => {
+    return str?.match(re)?.length ?? 0;
+};
+
+// Observer to detect code button/shortcut
+const watch = (mutations, observer) => {
+    for (let i = 0; i < mutations.length; i++) {
+        let mutation = mutations[i];
+        if (mutation.addedNodes.length > 0) {
+            try {
+                let node = mutation.addedNodes[0];
+                if (node.classList.contains('CodeMirror-line')) {
+                    let field_root = node.closest('.editing-area').querySelector('.rich-text-editable').shadowRoot;
+                    let code_mirror = field_root.host.closest('.editing-area').querySelector('.CodeMirror textarea');
+
+                    observer.disconnect();
+                    code_mirror.addEventListener('focus', codeOnFocus);
+                    code_mirror.addEventListener('blur', codeOnBlur);
+                    break;
+                }
+            } catch (error) {
+                // A more precise solution is not worth the effort.
+            }
+        }
+    }
+}
+let observers = [];
+
+// Observer to detect field area size changes to re-calculate minimap positions
+const resizeObserver = new ResizeObserver(entries => {
+    for (let entry of entries) {
+        fillMinimap();
+        if (settings['auto'] && scroll_to) {
+            scrollToMatch();
+        }
+    }
+});
+
+
+// UI controls
+let controls =
+`
+<div id="bsrh-controls-positioner"><div class="bsrh-controls">
+    <span class="match-count-holder">
+      <span class="match-count-number">0</span>
+      <span class="match-count-text">Matches</span>
+    </span>
+    <span class="sub-total">
+      <span class='field-count-holder'>Fields: <span>0</span></span>
+      <span class="separator">❘</span>
+      <span class='tag-count-holder'>Tags: <span>0</span></span>
+      <span class="separator">❘</span>
+      <span class='auto-state-holder'>Scroll:&nbsp; <span>Off</span></span>
+      <span class="settings"></span>
+    </span>
+    <div id='bsrh-settings' open='false'>
+        <div id='bsrh-settings-general'>
+            <h6 class='inline-title'><span>General</span></h6>
+            <div class='general-section settings-content'>
+                <div>
+                    <span>Display position&nbsp;</span>
+                    <select name="position" id="bsrh-position">
+                      <option value="inline">Inline</option>
+                      <option value="top">Top</option>
+                      <option value="bottom">Bottom</option>
+                    </select>
+                    <select name="alignment" id="bsrh-alignment">
+                      <option value="left">Left</option>
+                      <option value="middle">Middle</option>
+                      <option value="right">Right</option>
+                    </select>
+                </div>
+                <div>
+                    <input type="checkbox" id="bsrh-nofocus" name="nofocus"/>
+                    <label for="bsrh-nofocus">Hide highlighting on field focus</label>
+                </div>
+                <div>
+                    <input type="checkbox" id="bsrh-minimap" name="minimap"/>
+                    <label for="bsrh-minimap">Show match positions in scrollbar</label>
+                </div>
+            </div>
+        </div>
+        <div id='bsrh-settings-colors'>
+            <h6 class='inline-title'><span>Colors</span></h6>
+            <div class='color-tabs'>
+                <div class='color-title' target='light'>Light</div>
+                <div class='color-title' target='dark'>Dark</div>
+                <div class='color-title' target='presets'>Presets</div>
+            </div>
+
+            <div class='color-section settings-content' section='light'>
+                <div>
+                    <span>Background</span>
+                    <input id='bsrh-light-background' type='color'/>
+                </div>
+                <div>
+                    <span>Foreground</span>
+                    <input id='bsrh-light-foreground' type='color'/>
+                </div>
+                <div>
+                    <span>Scrollbar</span>
+                    <input id='bsrh-light-match-position' type='color'/>
+                </div>
+                <div>
+                    <span>Overlap</span>
+                    <input id='bsrh-light-overlap' type='color'/>
+                </div>
+            </div>
+
+            <div class='color-section settings-content' section='dark'>
+                <div>
+                    <span>Background</span>
+                    <input id='bsrh-dark-background' type='color'/>
+                </div>
+                <div>
+                    <span>Foreground</span>
+                    <input id='bsrh-dark-foreground' type='color'/>
+                </div>
+                <div>
+                    <span>Scrollbar</span>
+                    <input id='bsrh-dark-match-position' type='color'/>
+                </div>
+                <div>
+                    <span>Overlap</span>
+                    <input id='bsrh-dark-overlap' type='color'/>
+                </div>
+            </div>
+
+            <div class='color-section settings-content' section='presets'>
+                <div class='preset-swatch'></div>
+            </div>
+        </div>
+    </div>
+</div></div>
+`
+
+let minimap = null;
+let scrollarea = null;
+let fieldarea = null;
+let toolbar = null;
+let noteeditor = null;
+
+function addControls(_settings) {
+    settings = _settings
+
+    // First load has a race condition. Keep trying until fields appear.
+    if (!document.querySelector(".note-editor .fields")) {
+        setTimeout(() => {addControls(settings)}, 20)
+        return;
+    }
+    // Grab elements for later use
+    scrollarea = document.querySelector('.scroll-area');
+    fieldarea = document.querySelector('.scroll-area .fields');
+    toolbar = document.querySelector('.editor-toolbar');
+    noteeditor = document.querySelector('.note-editor')
+
+    // Positioning
+    let tb_container = document.querySelector('div[role="toolbar"]');
+    if (settings['position'] == 'inline') {
+        tb_container.insertAdjacentHTML("beforeend", controls);
+    } else if (settings['position'] == 'top') {
+        toolbar.insertAdjacentHTML("beforeend", controls);
+    } else if (settings['position'] == 'bottom') {
+        noteeditor.insertAdjacentHTML("beforeend", controls);
+    }
+    let positioner = document.getElementById('bsrh-controls-positioner');
+    positioner.setAttribute('position', settings['position']);
+    positioner.setAttribute('alignment', settings['alignment']);
+
+    // Settings menu inputs
+    document.getElementById('bsrh-position').value = settings['position'];
+    document.getElementById('bsrh-alignment').value = settings['alignment'];
+    document.getElementById('bsrh-nofocus').checked = settings['nofocus'];
+    document.getElementById('bsrh-minimap').checked = settings['minimap'];
+
+    loadUserColors();
+    loadPresetColors();
+
+    // Steal the cog icon and shove it into our own settings button
+    let cog = document.querySelector('.floating-reference button span').cloneNode(true);
+    document.querySelector('.bsrh-controls .settings').append(cog);
+
+    // Add the minimap
+    let _scrollarea = document.querySelector('.scroll-area-relative');
+    _scrollarea.insertAdjacentHTML("beforeend", `<div id="match-minimap"></div>`);
+    minimap = document.getElementById("match-minimap");
+
+    // Add observers to recalculate minimap positions on height changes
+    resizeObserver.observe(fieldarea);
+    resizeObserver.observe(_scrollarea);
+    updateControls();
+
+    // Show/Hide minimap based on setting
+    noteeditor.setAttribute('minimap', settings['minimap'])
+
+    // Set which color settings tab is open based on current theme
+    if (document.querySelector(':root').getAttribute('data-bs-theme') == "light") {
+        showColorTab(document.querySelector('.color-title[target=light]'));
+    } else {
+        showColorTab(document.querySelector('.color-title[target=dark]'));
+    }
+
+    // Menu events
+    document.querySelector('.auto-state-holder').addEventListener('click', onAutoChanged);
+    document.querySelector('.settings').addEventListener('click', bsrhSettings);
+    document.querySelector('#bsrh-position').addEventListener('change', onPositionChanged);
+    document.querySelector('#bsrh-alignment').addEventListener('change', onAlignmentChanged);
+    document.querySelectorAll('.color-title').forEach(e => e.addEventListener('click', showColorTab));
+    document.querySelector('#bsrh-nofocus').addEventListener('change', onNofocusChanged);
+    document.querySelector('#bsrh-minimap').addEventListener('change', onMinimapChanged);
+    document.querySelectorAll('.color-section input').forEach(e => e.addEventListener('input', onColorChanged));
+}
+
+function loadUserColors() {
+    let root = document.querySelector(':root');
+    let rs = getComputedStyle(root);
+    const colors = [
+        'light-background',
+        'light-foreground',
+        'light-overlap',
+        'light-match-position',
+        'dark-background',
+        'dark-foreground',
+        'dark-overlap',
+        'dark-match-position'
+    ];
+    colors.forEach(name => {
+        value = settings[name]
+        css_name = '--bsrh-'+name;
+        element_name = 'bsrh-'+name;
+        if (value) {
+            // TODO: restore in a future version when browser catches up
+            // root.style.setProperty(css_name , value);
+
+            // This is the hacky version
+            let sheets = document.styleSheets;
+            for (let i = 0; i < sheets.length; i++) {
+                sheets[i].addRule(
+                    "::highlight(match), ::highlight(tag), ::highlight(overlap), :root",
+                    `${css_name}: ${value};`
+                )
+            }
+            // Also set the input field's value
+            document.getElementById(element_name).value = value;
+        } else {
+            // Use the CSS value as the default color of the input field
+            document.getElementById(element_name).value = rs.getPropertyValue(css_name);
+        }
+    })
+}
+
+function loadPresetColors() {
+    let swatch = document.querySelector('.preset-swatch');
+    let bg_name = 'light-background';
+    let fg_name = 'light-foreground';
+    if (document.querySelector(':root').getAttribute('data-bs-theme') == "dark") {
+        bg_name = 'dark-background';
+        fg_name = 'dark-foreground';
+    }
+    for (let i = 0; i < bsrh_presets.length; i++) {
+        let bg = bsrh_presets[i][bg_name];
+        let fg = bsrh_presets[i][fg_name];
+        let preset =
+        `<span idx=${i} ` +
+        `style='background-color: ${bg}; color: ${fg};'` +
+        `>Example</span>`
+        swatch.insertAdjacentHTML("beforeend", preset);
+    }
+    swatch.querySelectorAll('span').forEach(e => e.addEventListener('click', onPreset));
+}
+
+function updateControls() {
+    let c = document.querySelector('.bsrh-controls');
+
+    // Total matches
+    let total_text = matched_total == 1 ? 'Match&nbsp;&nbsp;' : 'Matches';
+
+    c.querySelector('.match-count-number').innerHTML = matched_total;
+    c.querySelector('.match-count-text').innerHTML = total_text;
+    c.querySelector('.match-count-holder').setAttribute('matched', matched_total > 0);
+
+    // Fields
+    c.querySelector('.field-count-holder').setAttribute('matched', matched_fields > 0);
+    c.querySelector('.field-count-holder span').innerHTML = matched_fields;
+
+    // Tags
+    c.querySelector('.tag-count-holder').setAttribute('matched', matched_tags > 0);
+    c.querySelector('.tag-count-holder span').innerHTML = matched_tags;
+
+    // Auto-scroll
+    c.querySelector('.auto-state-holder').setAttribute('matched', settings['auto']);
+    c.querySelector('.auto-state-holder span').innerHTML = settings['auto'] ? 'On' : 'Off';
+}
+
+// Consume the python payload containing the search terms
+function parseTerms() {
+    let payload = JSON.parse(atob(terms_str));
+
+    // Pre-compile all the regexs for better performance and ignore match-none/match-all cases.
+
+    function compileNormals(terms) {
+        let out = [];
+        terms.forEach(term => {
+            if (term.length == 0 || term == ".*") {
+                return;
+            }
+            out.push(new RegExp(term, "gi"));
+        })
+        return out;
+    }
+    function compileRegexes(terms) {
+        let out = [];
+        terms.forEach(term => {
+            if (term['term'].length == 0 || term['term'] == ".*") {
+                return;
+            }
+            out.push(new RegExp(term['term'], term['flags']));
+        })
+        return out;
+    }
+    function compileNoncombs(terms) {
+        let out = [];
+
+        terms.forEach(term => {
+            // Anki escapes spaces in quoted terms. This breaks our regex, so unquote it.
+            term = term.replace('\\ ', ' ');
+            if (term.length == 0 || term == ".*") {
+                return;
+            }
+            let search = term.normalize("NFKD").replace(/\p{M}/gu, '');
+
+            // Anki substitutes some extra characters in non-combining mode and matches both ways.
+            // We need to support that as well.
+            // https://github.com/ankitects/anki/blob/71ec878780c1b81b49b1e18b3c41237bda51e20c/rslib/src/text.rs#L401
+            // We also add a bunch of our own characters as we find them.
+            function replace_more(string) {
+                var re =
+                /(Æ|TH|OE|€|Ð|Ø|Þ|ß|ð|Đ|Ħ|ĸ|Ł|Ŋ|Œ|Ŧ|Ə|ǝ|ɑ|E|AE|D|O|s|H|i|k|L|N|T|a|ا|أ|إ|آ|ى|و|ؤ|ي|ئ|ت|ة|\(|\))/gui;
+                return string.replace(re, function(match) {
+                    if (['(', ')'].includes(match)) {
+                        return '\\' + match;
+                    }
+                    if (!['ß', 'ð', 'ǝ', 'ɑ'].includes(match)) {
+                        match = match.toUpperCase();
+                    }
+                    if (['ا','أ','إ','آ','ى'].includes(match)) {
+                        return '(ا|أ|إ|آ|ى)';
+                    }
+                    if (['و','ؤ'].includes(match)) {
+                        return '(و|ؤ)';
+                    }
+                    if (['ي','ئ'].includes(match)) {
+                        return '(ي|ئ)';
+                    }
+                    if (['ت','ة'].includes(match)) {
+                        return '(ت|ة)';
+                    }
+
+                    switch (match) {
+                        case 'AE': return "(AE|Æ|æ)";
+                        case 'TH': return "(TH|Þ|þ)";
+                        case 'OE': return "(OE|Œ|œ)";
+                        case '€': return "(€|E)";
+                        case 'Æ': return "(Æ|AE|ae)";
+                        case 'Ð': return "(Ð|D)";
+                        case 'Ø': return "(Ø|O|o)";
+                        case 'Þ': return "(Þ|TH|th)";
+                        case 'ß': return "(ß|s)";
+                        case 'ð': return "(ð|d)";
+                        case 'Đ': return "(Đ|D|d)";
+                        case 'Ħ': return "(Ħ|H|h)";
+                        case 'ĸ': return "(ĸ|k)";
+                        case 'Ł': return "(Ł|L|l)";
+                        case 'Ŋ': return "(Ŋ|N|n)";
+                        case 'Œ': return "(Œ|OE|oe)";
+                        case 'Ŧ': return "(Ŧ|T|t)";
+                        case 'Ə': return "(Ə|E)";
+                        case 'ǝ': return "(ǝ|e)";
+                        case 'ɑ': return "(ɑ|a)";
+                        case 'E': return "(E|€|Ə|ǝ)";
+                        case 'D': return "(D|Ð|Đ|ð|đ)";
+                        case 'O': return "(O|Ø|ø)";
+                        case 'S': return "(s|ß)";
+                        case 'H': return "(H|Ħ|ħ)";
+                        case 'I': return "(i|ı)";
+                        case 'K': return "(k|ĸ)";
+                        case 'L': return "(L|Ł|ł)";
+                        case 'N': return "(N|Ŋ|ŋ)";
+                        case 'T': return "(T|Ŧ|ŧ)";
+                        case 'A': return "(a|ɑ)";
+                    }
+                });
+            }
+
+            let regex_build = [];
+            for (let i = 0; i < search.length; i++) {
+                regex_build.push(search[i]);
+                regex_build.push('\\p{M}*');
+            }
+            const built = replace_more(regex_build.join(''));
+            const regex = new RegExp(built, 'giu');
+
+            out.push(regex);
+        })
+        return out;
+    }
+    function compileFields(fields) {
+        let out = [];
+        fields.forEach(field => {
+            field['terms'] = {
+                'normal': compileNormals(field['terms']['normal']),
+                'regex' : compileRegexes(field['terms']['regex']),
+                'noncomb': compileNoncombs(field['terms']['noncomb'])
+            }
+            out.push(field);
+        })
+        return out;
+    }
+
+    terms_parsed = {
+        'normal':  compileNormals(payload['normal']),
+        'regex': compileRegexes(payload['regex']),
+        'noncomb': compileNoncombs(payload['noncomb']),
+        'fields': compileFields(payload['fields']),
+        'tags': payload['tags']
+    };
+}
+
+// Do initial work after note loads.
+function beginHighlighter() {
+    // Clean slate when switching notes
+    CSS.highlights.clear();
+    CSS.highlights.set('match', new Highlight());
+    CSS.highlights.set('tag', new Highlight());
+    CSS.highlights.set('overlap', new Highlight());
+    scroll_to = null;
+    matched_fields = 0;
+    matched_total = 0;
+    matched_tags = 0;
+    let containers = document.querySelectorAll('.field-container');
+    if (containers.length == 0) {
+        return;
+    }
+    containers.forEach((c) => { unhighlightCodeExpander(c); })
+    minimap.innerHTML = '';
+
+    // Highlight all fields
+    containers.forEach((c) => { highlightField(c, minimap_now=false); })
+
+    // Highlight tags
+    highlightTags();
+
+    // Attach observers for the HTML editor (detect when it appears).
+    // Clear out the old ones first.
+    observers.forEach((o) => { o.disconnect(); })
+    observers = [];
+    containers.forEach((c) => {
+        let observer = new MutationObserver(watch);
+        observers.push(observer);
+        observer.observe(c, {childList: true, subtree: true});
+    })
+
+    // Update UI after matching done
+    updateControls();
+    fillMinimap();
+    if (settings['auto'] && scroll_to) {
+        // Here's how this is going to work. We scroll to the element immediately.
+        scrollToMatch();
+
+        // But the editor contents shift and shuffle for all sorts of reasons, so it may not land
+        // on the correct element after all. To solve this, we *keep* scrolling to this element
+        // on every resize in the resize observer, but only for the first 500mss.
+        setTimeout(() => { scroll_to = false; }, 500);
+    }
+}
+
+// Highlight a single field
+// minimap_now = false turns off minimap building for optimization. Call it manually
+// after all fields processed.
+function highlightField(container, minimap_now = true) {
+    field_name = container.querySelector('.label-name').textContent.toLowerCase();
+    let terms = {
+        'normal': [...terms_parsed['normal']],
+        'regex': [...terms_parsed['regex']],
+        'noncomb': [...terms_parsed['noncomb']]
+    }
+
+    // For any search term that targets a field name that matches this one, distribute
+    // its inner search terms into their respective types
+    terms_parsed['fields'].forEach(field => {
+        if (new RegExp('^'+field['name']+'$', 'gi').test(field_name)) {
+            terms['normal'].push(...field['terms']['normal']);
+            terms['regex'].push(...field['terms']['regex']);
+            terms['noncomb'].push(...field['terms']['noncomb']);
+        }
+    });
+
+    let field_root = container.querySelector('.rich-text-editable').shadowRoot;
+    let editable = field_root.querySelector('anki-editable');
+    let code_mirror = container.querySelector('.CodeMirror textarea');
+    if (code_mirror && code_mirror.closest('.plain-text-input').hasAttribute('hidden')) {
+        code_mirror = null;
+    }
+
+    // Note on counting matches: We count the matches on the text nodes in the field instead of the whole field's
+    // editable.textContent because it gives us the same match behaviour as Anki's search. E.g., the field
+    // gr<i>ee</i>tings does not match 'greetings', so we won't either, even if a user may expect it to.
+
+    // Track ranges to find overlaps
+    let ranges = new Map();
+    // Track %20 positions
+    let p20s = new Set();
+
+    function highlightWithin(node, regex, normalize=false) {
+        let match_count = 0;
+        function highlightWithinInner(node) {
+            if (node.nodeType === Node.TEXT_NODE) {
+                let p20_offsets = [];
+                let data = node.data;
+                let data2 = null;
+                if (normalize) {
+                    data = data.normalize("NFKD").replace(/\p{M}/gu, '');
+                    data2 = node.data;
+                    // Note for normalized text search:
+                    // Stripping the target data of combining characters works well for some languages
+                    // and fails on others. In Arabic, for example, the diacritical marks *contribute
+                    // to the string length* because they cannot be normalized into a single code point
+                    // (like á), so matching 4 chars in a word with 4 chars and 4 diacritics means the
+                    // highlighting will only cover half the word (which has length 8). To correctly match,
+                    // the target text must be unstripped and the *search string* does the ignoring of
+                    // combining characters. That's what the p{M}* spam does when we build the search regex.
+
+                    // These strategies are incompatible but my workaround is to run both of them every time
+                    // anyway and then detect which strategy is the correct choice. We can do this by finding
+                    // a discrepancy in the match length or position (if the combining chars are non-lengthy
+                    // then both matches will have the same length+position).
+
+                    // data2 and match2 will hold attempts to match the unstripped versions of data.
+                }
+
+                // Note: in filenames, non-ascii appears to be converted to escape codes. Thus,
+                // when normalizing, it is sufficient to only track original data (not data2)
+
+                if (p20s.has(data)) {
+                    // This is the portion of the code block that contains an image src with
+                    // a %20 in its filename. We convert the %20 to a space and keep a record
+                    // of the index where it happened
+                    data = data.replaceAll("%20", function(m, offset) {
+                        p20_offsets.push(offset);
+                        return ' '
+                    });
+                }
+
+                let matches = [...data.matchAll(regex)];
+                let matches2 = null;
+                if (normalize) {
+                    matches2 = [...data2.matchAll(regex)];
+                }
+
+                for (let i = 0; i < matches.length; i++) {
+                    let match = matches[i];
+                    if (normalize) {
+                        let match2 = matches2[i];
+                        if (match2 && (match[0].length != match2[0].length || match.index != match2.index)) {
+                            match = match2;
+                        }
+                    }
+
+
+                    // A lot of work for an edge case! If we have matches on a node that has
+                    // had %20s converted to spaces, we account for the excess distance we need
+                    // to travel in the original text to correctly cover the match
+                    p20_offset_start = 0;
+                    p20_offset_end = 0;
+                    p20_offsets.forEach((n) => {
+                        // Do we start after this %20?
+                        if (n < match.index + p20_offset_start) {
+                            p20_offset_start += 2;
+                        }
+                        // Does the match itself contain this %20 within it?
+                        if (n >= match.index + p20_offset_start &&
+                            n < match.index + p20_offset_start + match[0].length + p20_offset_end) {
+                            p20_offset_end += 2
+                        }
+                    })
+
+                    match_count++;
+                    let r = new StaticRange({
+                        'startContainer': node,
+                        'endContainer': node,
+                        'startOffset': p20_offset_start + match.index,
+                        'endOffset': p20_offset_start + match.index + match[0].length + p20_offset_end
+                    });
+                    r.owner = container;
+                    CSS.highlights.get('match').add(r);
+                    if (scroll_to === null) {
+                        scroll_to = r;
+                    }
+                    if (!ranges.has(node)) {
+                        ranges.set(node, []);
+                    }
+                    ranges.get(node).push([r.startOffset, r.endOffset]);
+                }
+            } else {
+                node.childNodes.forEach(n => highlightWithinInner(n))
+            }
+        }
+        highlightWithinInner(node);
+        return match_count;
+    }
+
+    function highlightOverlaps() {
+        for (let [node, _ranges] of ranges.entries()) {
+            let overlaps = new Set();
+            for (let i = 0; i < _ranges.length; i++) {
+                let n_start = _ranges[i][0];
+                let n_end   = _ranges[i][1];
+                for (let j = i+1; j < _ranges.length; j++) {
+                    let c_start = _ranges[j][0];
+                    let c_end   = _ranges[j][1];
+
+                    if (c_end < n_start) {
+                        continue;
+                    }
+                    if (c_start > n_end) {
+                        continue;
+                    }
+
+                    if (c_start <= n_start) {
+                        if (c_end <= n_end) {
+                            overlaps.add(JSON.stringify([n_start, c_end]));
+                        }
+                        if (c_end >= n_end) {
+                            overlaps.add(JSON.stringify([n_start, n_end]));
+                        }
+                    }
+                    if (c_start >= n_start) {
+                        if (c_end >= n_end) {
+                            overlaps.add(JSON.stringify([c_start, n_end]));
+                        }
+                        if (c_end <= n_end) {
+                            overlaps.add(JSON.stringify([c_start, c_end]));
+                        }
+                    }
+                }
+            }
+
+            overlaps.forEach(overlap => {
+                let o = JSON.parse(overlap);
+                let r = new StaticRange({
+                    'startContainer': node,
+                    'endContainer': node,
+                    'startOffset': o[0],
+                    'endOffset': o[1]
+                });
+                r.owner = container;
+                CSS.highlights.get('overlap').add(r);
+            });
+        }
+    }
+
+    let match_count_editable = 0;
+    let match_count_code = 0;
+
+    // Code has a superfluous <br> at the end which can cause false positives. Remove it
+    let code = editable.innerHTML;
+    if (code.endsWith('<br>')) {
+        code = code.substring(0, code.length-4);
+    }
+
+    // The code view converts spaces within image src to %20. Convert them back, because
+    // Anki is matching on the space. Keep a record of any file names that were converted - we
+    // use them later to reposition highlights because the string length becomes different.
+    code = code.replace(/(<img.*src=")(.*)(">)/g, function(match, pre, src, post) {
+        src = src.replaceAll("%20", function(m) {
+            p20s.add('"'+src+'"');
+            return ' '
+        });
+        return pre+src+post;
+    })
+
+    terms['normal'].forEach(re => {
+        match_count_editable += highlightWithin(editable, re);
+        match_count_code += matchCount(code, re);
+    })
+    terms['regex'].forEach(re => {
+        match_count_editable += highlightWithin(editable, re);
+        match_count_code += matchCount(code, re);
+    })
+    terms['noncomb'].forEach(re => {
+        match_count_editable += highlightWithin(editable, re, normalize=true);
+        match_count_code += matchCount(code.normalize("NFKD").replace(/\p{M}/gu, ''), re);
+    })
+    highlightOverlaps();
+
+
+    if (code_mirror) {
+        ranges = new Map();
+        terms['normal'].forEach(re => {
+            highlightWithin(code_mirror.closest('.CodeMirror'), re, normalize=false);
+        })
+        terms['regex'].forEach(re => {
+            highlightWithin(code_mirror.closest('.CodeMirror'), re, normalize=false);
+        });
+        terms['noncomb'].forEach(re => {
+            highlightWithin(code_mirror.closest('.CodeMirror'), re, normalize=true);
+        });
+        highlightOverlaps();
+    }
+
+    // Let's not try to do unnecessary work
+    if (match_count_code + match_count_editable == 0) {
+        return
+    }
+
+    matched_fields++;
+    matched_total += Math.max(match_count_editable, match_count_code);
+
+    // There are matches not visible to the user but are inside code. Highlight code button to inform.
+    if (match_count_code > match_count_editable) {
+        highlightCodeExpander(container);
+    }
+
+    editable.addEventListener('focus', editableOnFocus);
+    editable.addEventListener('blur', editableOnBlur);
+
+    if (code_mirror) {
+        code_mirror.addEventListener('focus', codeOnFocus);
+        code_mirror.addEventListener('blur', codeOnBlur);
+    }
+    // Try this again in case the match is inside code mirror
+    if (scroll_to === null) {
+        scroll_to = container;
+    }
+
+    if (minimap_now) {
+        fillMinimap();
+    }
+}
+
+function unhighlightField(container) {
+    CSS.highlights.get('match').forEach(hl => {
+        if (hl.owner == container) {
+            CSS.highlights.get('match').delete(hl);
+        }
+    })
+    CSS.highlights.get('overlap').forEach(hl => {
+        if (hl.owner == container) {
+            CSS.highlights.get('overlap').delete(hl);
+        }
+    })
+}
+
+function fillMinimap() {
+    if (!settings['minimap']) {
+        return;
+    }
+    // If the field area is too small to generate a scroll bar, we cap the height of the minimap in the
+    // positioning calculation to match it. This gives us precise notch positioning when there's no scrolling.
+    let max_y = fieldarea.scrollHeight;
+    if (fieldarea.scrollHeight < scrollarea.clientHeight) {
+        max_y = scrollarea.clientHeight;
+    }
+
+    let fragment = new DocumentFragment();
+
+    function addNotch(target) {
+        // To get the correct position, we have to take into account how much the user has scrolled down
+        // and how much the toolbar is pushing the content down. I do not understand why all this is required
+        // instead of getting the correct position from getClientRects(). Nevertheless, through trial and error,
+        // I found this combination of additions and subtractions resolves the precise coordinates of the
+        // highlighted range.
+
+        let notch = document.createElement('div');
+        notch.setAttribute('class', 'match-position');
+        let range = document.createRange();
+
+        if (target instanceof StaticRange) {
+            // Is a highlighter entry. We have exact range.
+            range.setStart(target.startContainer, target.startOffset);
+            range.setEnd(target.endContainer, target.endOffset);
+        } else {
+            // Is a code button. Can select whole thing.
+            range.selectNodeContents(target);
+        }
+
+        let rect = range.getClientRects()[0];
+        if (rect == null) {
+            // The observer fires while note is changing. Ignore these.
+            return
+        }
+
+        let tb = toolbar.clientHeight+1; // The +1 is for some kind of margin? Lines up better with it present.
+        let fromtop = scrollarea.scrollTop + rect.top + (rect.height / 2);
+        let pos = ((fromtop-tb) / max_y) * 100;
+        // Cap min/max because they might be hard to see at the extremes
+        pos = Math.min(99.6, Math.max(0.4, pos));
+        notch.style.top = pos +"%";
+        fragment.append(notch);
+    }
+    CSS.highlights.get('match').forEach(hl => addNotch(hl));
+    document.querySelectorAll(".field-container[bsrh-moreincode=true").forEach(container => {
+        addNotch(container.querySelector('.plain-text-badge button > span'));
+    });
+
+    minimap.innerHTML = '';
+    minimap.append(fragment);
+}
+
+function editableOnFocus(event) {
+    if (settings['nofocus']) {
+        let editable = event.currentTarget;
+        let container = editable.parentNode.host.closest('.field-container');
+        unhighlightField(container);
+    }
+}
+
+function editableOnBlur(event) {
+    let editable = event.currentTarget;
+    let container = editable.parentNode.host.closest('.field-container');
+    highlightField(container);
+}
+
+function codeOnFocus(event) {
+    let code_mirror = event.currentTarget;
+    let container = code_mirror.closest('.field-container');
+    if (container.hasAttribute('bsrh-moreincode')) {
+        // Seems to be a race condition? This makes it work
+        setTimeout(() => {
+            highlightField(container);
+            fillMinimap();
+        }, 0)
+    } else {
+        setTimeout(() => {
+            // Highlight the field to fill out the minimap with the new matches before removing
+            highlightField(container);
+            if (settings['nofocus']) {
+                unhighlightField(container);
+            }
+        }, 0)
+    }
+}
+
+function codeOnBlur(event) {
+    let code_mirror = event.currentTarget;
+    let container = code_mirror.closest('.field-container');
+    highlightField(container);
+}
+
+function highlightCodeExpander(container) {
+    container.setAttribute('bsrh-moreincode', true);
+}
+
+function unhighlightCodeExpander(container) {
+    container.removeAttribute('bsrh-moreincode');
+}
+
+function highlightTags() {
+    let buttons = document.querySelectorAll("button[data-addon-tag]");
+    terms_parsed['tags'].forEach(tag => {
+        let re = new RegExp(tag, "gi");
+        buttons.forEach(button => {
+            // The full tag text may be truncated and the matched portion fully or partially hidden.
+            // We will do our match on the full tag text first to get all the matches.
+            let full_text = button.getAttribute('data-addon-tag');
+            let matches_full = [...full_text.matchAll(re)];
+            if (matches_full.length == 0) {
+                return;
+            }
+            matched_tags++;
+            let button_node = button.querySelector('span').childNodes[0];
+            let button_text = button_node.data;
+            let truncated = button_text[0] == '…';
+
+            matches_full.forEach((match) => {
+                matched_total++;
+
+                // If any portion of the match falls outside of the visible range, make it known
+                // by applying a style to the button. Matches within the range are highlighted.
+                // We take advantage of the fact that truncation is always at the start.
+                let match_start = match.index;
+                let match_end = match.index + match[0].length;
+
+                let visible_start = 0;
+                let visible_end = full_text.length;
+                if (truncated) {
+                    visible_start = full_text.length - (button_text.length-1);
+                }
+
+                // Note: a match can be fully truncated, fully visible, or partially both.
+                // The logic below supports all three.
+
+                // Truncated
+                if (match_start < visible_start) {
+                    button.setAttribute('bsrh-moreincode', true);
+                    let r = new StaticRange({
+                        'startContainer': button_node,
+                        'endContainer': button_node,
+                        'startOffset': 0,
+                        'endOffset': 1
+                    });
+                    CSS.highlights.get('tag').add(r);
+                }
+
+                // Visible
+                if (match_end >= visible_start) {
+                    let r = new StaticRange({
+                        'startContainer': button_node,
+                        'endContainer': button_node,
+                        'startOffset': Math.max(0, match_start - (full_text.length - button_text.length)),
+                        'endOffset': match_end - (full_text.length - button_text.length)
+                    });
+                    CSS.highlights.get('tag').add(r);
+                }
+            });
+        });
+    });
+}
+
+function scrollToMatch() {
+    let target = scroll_to;
+    // The positioning code resembles the minimap notch positioning, but tweaked
+    // to center after the position is found and without the percentage.
+
+    let max_y = fieldarea.scrollHeight;
+    if (fieldarea.scrollHeight < scrollarea.clientHeight) {
+        return;
+    }
+
+    let range = document.createRange();
+    if (target instanceof StaticRange) {
+        range.setStart(target.startContainer, target.startOffset);
+        range.setEnd(target.endContainer, target.endOffset);
+    } else {
+        range.selectNodeContents(target);
+    }
+    let rect = range.getClientRects()[0];
+    if (rect == null) {return}
+    let tb = toolbar.clientHeight+1;
+    let fromtop = scrollarea.scrollTop + rect.top + (rect.height / 2);
+    let pos = fromtop-tb;
+    let centered = pos - (scrollarea.clientHeight / 2);
+    scrollarea.scrollTo(0, centered);
+}
+
+// ---- Settings ----
+
+function saveSettings() {
+    pycmd('BSRH:' + JSON.stringify(settings));
+}
+
+function onAutoChanged(event) {
+    settings['auto'] = !settings['auto']
+    saveSettings();
+    beginHighlighter();
+}
+
+function bsrhSettings() {
+    let open = document.getElementById('bsrh-settings').getAttribute('open');
+    document.getElementById('bsrh-settings').setAttribute('open', open == "false");
+}
+
+// Close menu when we click outside of it
+document.addEventListener('mousedown', function(e) {
+    // Ignore clicks on the actual menu button because that click will close it
+    if (e.target.closest('.settings') == document.querySelector('.bsrh-controls .settings')) {
+        return;
+    }
+    // Everything else that is not a descendant of the menu will close it
+    if (!document.getElementById('bsrh-settings').contains(e.target)) {
+        document.getElementById('bsrh-settings').setAttribute('open', "false");
+    }
+});
+
+function showColorTab(e) {
+    let target = e;
+    if(e.target) {
+        target = e.target;
+    }
+    document.querySelectorAll('.color-title').forEach(e => e.setAttribute('active', false));
+    document.querySelectorAll('.color-section').forEach(e => e.setAttribute('active', false));
+
+    target.setAttribute('active', true);
+    let section = target.getAttribute('target');
+    document.querySelector(`.color-section[section=${section}]`).setAttribute('active', true);
+}
+
+function onColorChanged(e) {
+    let target = e.target;
+    var root = document.querySelector(':root');
+    const colors = [
+        'bsrh-light-background',
+        'bsrh-light-foreground',
+        'bsrh-light-overlap',
+        'bsrh-light-match-position',
+        'bsrh-dark-background',
+        'bsrh-dark-foreground',
+        'bsrh-dark-overlap',
+        'bsrh-dark-match-position'
+    ];
+
+    for (let i = 0; i < colors.length; i++) {
+        let name = colors[i];
+        if (name != target.id) {
+            continue;
+        }
+        // TODO: restore in a future version when browser catches up
+        // root.style.setProperty('--'+name , target.value);
+        // This is the hacky version
+        let sheets = document.styleSheets;
+        for (let i = 0; i < sheets.length; i++) {
+            sheets[i].addRule(
+                "::highlight(match), ::highlight(tag), ::highlight(overlap), :root",
+                `--${name}: ${target.value};`
+            )
+        }
+        // Save setting
+        settings[name.substr(5, name.length)] = target.value;
+        saveSettings();
+        return;
+    }
+}
+
+function onPositionChanged(e) {
+    settings['position'] = e.target.value;
+    let positioner = document.getElementById('bsrh-controls-positioner');
+    positioner.setAttribute('position', settings['position']);
+    if (settings['position'] == 'inline') {
+        document.querySelector('div[role="toolbar"]').append(positioner);
+    } else if (settings['position'] == 'top') {
+        toolbar.append(positioner);
+    } else if (settings['position'] == 'bottom') {
+        noteeditor.append(positioner);
+    }
+    saveSettings();
+}
+function onAlignmentChanged(e) {
+    settings['alignment'] = e.target.value;
+    document.getElementById('bsrh-controls-positioner').setAttribute('alignment', settings['alignment'])
+    saveSettings();
+}
+function onNofocusChanged(e) {
+    settings['nofocus'] = e.target.checked;
+    saveSettings();
+}
+function onMinimapChanged(e) {
+    settings['minimap'] = e.target.checked;
+    noteeditor.setAttribute('minimap', settings['minimap'])
+    saveSettings();
+}
+function onPreset(e) {
+    let preset = bsrh_presets[e.target.getAttribute('idx')];
+    Object.keys(preset).forEach(key => {
+        settings[key] = preset[key];
+    })
+    saveSettings();
+    loadUserColors();
+}

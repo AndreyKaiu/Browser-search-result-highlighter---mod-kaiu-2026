@@ -1,0 +1,10 @@
+{
+	"name": "Browser search result highlighter - mod kaiu 2026",
+	"mod": 1794735191,
+	"min_point_version": 250900,
+	"max_point_version": 260940,
+	"branch_index": 0,
+	"disabled": false,
+	"conflicts": ["1057317630","1920690901","1251668918","342408518"],
+	"update_enabled": true
+}

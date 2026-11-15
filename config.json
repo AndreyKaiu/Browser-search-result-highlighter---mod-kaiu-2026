@@ -1,0 +1,10 @@
+{
+    "forWideScreenСode_WindowIsOnRight": true,
+    "highlightingSelectedArea_WhenNotInActiveField": true,
+    "onceFieldReceivesFocus_ScrollToCursor": true,
+    "searchBarOpen": "Alt+Shift+F",
+    "searchBarOpenBrowser": "Alt+Shift+F",
+    "searchOnDoubleClick": false,
+    "searchOnDoubleClick_WhenSearchPanelIsOpen": true,
+    "search~History": ""
+}
