@@ -353,9 +353,10 @@
 
 		// IMPORTANT: checking through editable.contains, and not through instanceof+matches,
 		//because inside shadow root nodes belong to another realm
-		//and do not pass instanceof Element.
+		//and do not pass instanceof Element.		
 		const isInsideEditable = eventPath.some(node =>
-			node === editable || editable.contains(node)
+			node === editable ||
+			(node?.nodeType && editable.contains(node))
 		);
 
 		clearTimeout(mouseupTimers.get(host));
