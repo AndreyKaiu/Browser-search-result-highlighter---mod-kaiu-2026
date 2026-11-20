@@ -740,7 +740,7 @@ def add_cards_setup_bsp_search(addcards: AddCards) -> None:
     bsp = BSPSearchPanel(addcards)
     addcards.bsp_search_panel = bsp
     layout = addcards.form.verticalLayout_3
-    layout.insertWidget(layout.count() - 1, editor.bsp)
+    layout.insertWidget(layout.count() - 1, bsp)
     
 def review_setup_bsp_search():
     bsp = BSPSearchPanel(mw)
