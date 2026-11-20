@@ -39,6 +39,7 @@ Version 3.4.1
 I don't get notified of your reviews, and properly troubleshooting an issue through them is nearly impossible. Instead, please either use the [issue tracker (preferred),](https://github.com/AndreyKaiu/Browser-search-result-highlighter---mod-kaiu-2026/issues) add-on [support forums](https://forums.ankiweb.net), or just message me at [andreykaiu@gmail.com.](mailto:andreykaiu@gmail.com) Constructive feedback and suggestions are always welcome!
 
 #### VERSIONS
+- 3.4.1b, date: 2026-11-20. Fixing minor bugs.
 - 3.4.1b, date: 2026-11-15. Initial version.
 
 =========================
